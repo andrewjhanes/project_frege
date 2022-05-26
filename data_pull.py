@@ -1,24 +1,23 @@
 ##########################################################################################
 # Import and Setup
 ##########################################################################################
+# General info on stats
+    # wOBA: https://library.fangraphs.com/offense/woba/
 # import setup as s
 import logging
 import sys
 import pandas as pd
 import numpy as np
+from IPython import display
 import datetime as dt
 from datetime import date, datetime
 import matplotlib.mlab as mlab
 from matplotlib.pyplot import figure
 import matplotlib.pyplot as plt
-from statsmodels.tsa.arima_process import ArmaProcess
-import statsmodels.api as sm
-import statsmodels.formula.api as smf
-from causalimpact import CausalImpact
-# from: https://github.com/jldbc/pybaseball/blob/master/docs/statcast_pitcher.md
-import pybaseball
-from pybaseball import statcast_pitcher
-from pybaseball import playerid_lookup
+# Info on baseball_scraper package and Statcast fields
+    # https://pypi.org/project/baseball-scraper/
+    # https://github.com/spilchen/baseball_scraper/blob/master/docs/statcast.md
+    # https://baseballsavant.mlb.com/csv-docs
 import baseball_scraper as bs
 from baseball_scraper import statcast
 print("imports complete")
@@ -31,10 +30,11 @@ end_date = '2017-10-01'
 ##########################################################################################
 # Pull Data
 ##########################################################################################
-data_raw = bs.statcast(start_dt=start_date, end_dt=end_date)
+# data_raw = bs.statcast(start_dt=start_date, end_dt=end_date)
+# data_raw.to_csv('statcast_' + start_date + '_' + end_date + '.csv')
+data_raw = pd.read_csv('statcast_' + start_date + '_' + end_date + '.csv')
 data_raw.info()
 data_raw.head(10)
-data_raw.to_csv('statcast_' + start_date + '_' + end_date + '.csv')
 
 ##########################################################################################
 # Investigate Data
@@ -89,10 +89,50 @@ df_raw.groupby(['events'])[['type']].count().sort_values('type', ascending=False
 #       ...I think we should remove.
 
 ##########################################################################################
-# Investigate Data
+# Clean Data
 ##########################################################################################
 df = df_raw.copy()
+filt_pitch_name = ['Knuckle', 'Fork', 'Eephus', 'Pitch Out', 'Fastball', 'Screwball']
+filt_description = ['foul_bunt', 'hit_by_pitch', 'missed_bunt', 'pitchout', 'bunt_foul_tip']
+filt_events = ['hit_by_pitch', 'sac_bunt', 'caught_stealing_2b', 'strikeout_double_play', 'other_out',
+                 'caught_stealing_3b', 'pickoff_2b', 'pickoff_1b', 'catcher_interf', 'caught_stealing_home',
+                 'pickoff_caught_stealing_2b', 'game_advisory', 'pickoff_caught_stealing_home', 'stolen_base_2b',
+                 'stolen_base_home', 'pickoff_caught_stealing_3b']
 
+df['id_ab'] = df['game_pk'].astype(str) + df['at_bat_number'].astype(str)
+df['is_filt_pitch'] = 0
+df.loc[df['pitch_name'].isin(filt_pitch_name), 'is_filt_pitch'] = 1
+df['is_filt_desc'] = 0
+df.loc[df['description'].isin(filt_description), 'is_filt_desc'] = 1
+df['is_filt_event'] = 0
+df.loc[df['events'].isin(filt_events), 'is_filt_event'] = 1
+
+df['is_filt_any'] = df['is_filt_pitch'] + df['is_filt_desc'] + df['is_filt_event']
+filt_id_ab = df.loc[df['is_filt_any'] > 0].id_ab.values.tolist()
+df = df.loc[~df['id_ab'].isin(filt_id_ab)]
+df.head(1000).to_csv('sample_filtered_data.csv')
 ##########################################################################################
 # Basic grouping
 ##########################################################################################
+df = df.sort_values(['game_date', 'game_pk', 'at_bat_number', 'pitch_number'],
+                    ascending=True, na_position='first')
+df['pitch_type_prev'] = df.groupby(['game_pk', 'at_bat_number'])['pitch_type'].shift(1)
+df['pitch_name_prev'] = df.groupby(['game_pk', 'at_bat_number'])['pitch_name'].shift(1)
+df['type_prev'] = df.groupby(['game_pk', 'at_bat_number'])['type'].shift(1)
+df.head(1000).to_csv('sample_shifted_data.csv')
+
+df_1 = df.groupby(['pitch_name']).agg(
+    {'type': 'count',
+     'bb_type': 'count',
+     'woba_value': 'sum',
+     'woba_denom': 'sum'})
+df_1['woba'] = df_1['woba_value'] / df_1['woba_denom']
+df_1.sort_values('woba', ascending=False).head(10)
+
+df_2 = df.groupby(['pitch_name', 'pitch_name_prev']).agg(
+    {'type': 'count',
+     'bb_type': 'count',
+     'woba_value': 'sum',
+     'woba_denom': 'sum'})
+df_2['woba'] = df_2['woba_value'] / df_2['woba_denom']
+df_2.sort_values('bb_type', ascending=False).head(30)
